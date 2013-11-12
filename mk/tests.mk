@@ -922,6 +922,7 @@ $$(call TEST_OK_FILE,$(1),$(2),$(3),rmake): \
 $(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
 		src/test/run-make/%/Makefile \
 		$(3)/stage$(1)/bin/rustc$$(X_$(3))
+	@rm -rf $(3)/test/run-make/$$*
 	@mkdir -p $(3)/test/run-make/$$*
 	@echo maketest: $$*
 	@python src/etc/maketest.py $$(dir $$<) \
