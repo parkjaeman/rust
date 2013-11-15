@@ -19,6 +19,7 @@
 //! #[feature(...)] with a comma-separated list of features.
 
 use syntax::ast;
+use syntax::attr;
 use syntax::attr::AttrMetaMethods;
 use syntax::codemap::Span;
 use syntax::visit;
@@ -36,6 +37,7 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
     ("once_fns", Active),
     ("asm", Active),
     ("managed_boxes", Active),
+    ("link_args", Active),
 
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
@@ -107,6 +109,16 @@ impl Visitor<()> for Context {
                         }
                         _ => {}
                     }
+                }
+            }
+
+            ast::item_foreign_mod(*) => {
+                if attr::contains_name(i.attrs, "link_args") &&
+                    cfg!(stage0, remove_this_on_next_snapshot) {
+                    self.gate_feature("link_args", i.span,
+                                      "the `link_args` attribute is not portable \
+                                       across platforms, it is recommended to \
+                                       use `#[link(name = \"foo\")]` instead")
                 }
             }
 

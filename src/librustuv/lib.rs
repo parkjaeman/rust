@@ -41,7 +41,9 @@ via `close` and `delete` methods.
        url = "https://github.com/mozilla/rust/tree/master/src/librustuv")];
 
 #[license = "MIT/ASL2"];
-#[crate_type = "lib"];
+#[crate_type = "lib"]; // remove after stage0
+#[crate_type = "rlib"];
+#[crate_type = "dylib"];
 
 #[feature(macro_rules, globs)];
 #[allow(unrecognized_lint)]; // NOTE: remove after the next snapshot

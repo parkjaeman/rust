@@ -16,7 +16,8 @@
 
 #[desc = "rustdoc, the Rust documentation extractor"];
 #[license = "MIT/ASL2"];
-#[crate_type = "lib"];
+#[crate_type = "lib"]; // remove after stage0
+#[crate_type = "dylib"];
 
 #[feature(globs, struct_variant, managed_boxes)];
 

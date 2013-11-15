@@ -14,7 +14,7 @@
 use lib::llvm::{False, llvm, mk_object_file, mk_section_iter};
 use metadata::decoder;
 use metadata::encoder;
-use metadata::filesearch::{FileSearch, FileMatch, FileMatches, FileDoesntMatch};
+use metadata::filesearch::{FileSearch, FileMatches, FileDoesntMatch};
 use metadata::filesearch;
 use syntax::codemap::Span;
 use syntax::diagnostic::span_handler;
@@ -50,96 +50,169 @@ pub struct Context {
     metas: ~[@ast::MetaItem],
     hash: @str,
     os: Os,
-    is_static: bool,
     intr: @ident_interner
 }
 
-pub fn load_library_crate(cx: &Context) -> (~str, @~[u8]) {
-    match find_library_crate(cx) {
-      Some(t) => t,
-      None => {
-        cx.diag.span_fatal(cx.span,
-                           format!("can't find crate for `{}`",
-                                cx.ident));
-      }
+pub struct Library {
+    dylib: Option<Path>,
+    rlib: Option<Path>,
+    metadata: @~[u8],
+}
+
+impl Context {
+    pub fn load_library_crate(&self) -> Library {
+        match self.find_library_crate() {
+            Some(t) => t,
+            None => {
+                self.diag.span_fatal(self.span,
+                                     format!("can't find crate for `{}`",
+                                             self.ident));
+            }
+        }
     }
-}
 
-fn find_library_crate(cx: &Context) -> Option<(~str, @~[u8])> {
-    attr::require_unique_names(cx.diag, cx.metas);
-    find_library_crate_aux(cx, libname(cx), cx.filesearch)
-}
+    fn find_library_crate(&self) -> Option<Library> {
+        attr::require_unique_names(self.diag, self.metas);
+        let filesearch = self.filesearch;
+        let crate_name = crate_name_from_metas(self.metas);
+        let (dyprefix, dysuffix) = self.dylibname();
 
-fn libname(cx: &Context) -> (~str, ~str) {
-    if cx.is_static { return (~"lib", ~".rlib"); }
-    let (dll_prefix, dll_suffix) = match cx.os {
-        OsWin32 => (win32::DLL_PREFIX, win32::DLL_SUFFIX),
-        OsMacos => (macos::DLL_PREFIX, macos::DLL_SUFFIX),
-        OsLinux => (linux::DLL_PREFIX, linux::DLL_SUFFIX),
-        OsAndroid => (android::DLL_PREFIX, android::DLL_SUFFIX),
-        OsFreebsd => (freebsd::DLL_PREFIX, freebsd::DLL_SUFFIX),
-    };
+        // want: crate_name.dir_part() + prefix + crate_name.file_part + "-"
+        let dylib_prefix = format!("{}{}-", dyprefix, crate_name);
+        let rlib_prefix = format!("lib{}-", crate_name);
 
-    (dll_prefix.to_owned(), dll_suffix.to_owned())
-}
+        let mut matches = ~[];
+        do filesearch::search(filesearch) |path| {
+            match path.filename_str() {
+                None => FileDoesntMatch,
+                Some(file) => {
+                    let (candidate, existing) = if file.starts_with(rlib_prefix) &&
+                                                   file.ends_with(".rlib") {
+                        debug!("{} is an rlib candidate", path.display());
+                        (true, self.add_existing_rlib(matches, path, file))
+                    } else if file.starts_with(dylib_prefix) &&
+                              file.ends_with(dysuffix) {
+                        debug!("{} is a dylib candidate", path.display());
+                        (true, self.add_existing_dylib(matches, path, file))
+                    } else {
+                        (false, false)
+                    };
 
-fn find_library_crate_aux(
-    cx: &Context,
-    (prefix, suffix): (~str, ~str),
-    filesearch: @filesearch::FileSearch
-) -> Option<(~str, @~[u8])> {
-    let crate_name = crate_name_from_metas(cx.metas);
-    // want: crate_name.dir_part() + prefix + crate_name.file_part + "-"
-    let prefix = format!("{}{}-", prefix, crate_name);
-    let mut matches = ~[];
-    filesearch::search(filesearch, |path| -> FileMatch {
-      // FIXME (#9639): This needs to handle non-utf8 paths
-      let path_str = path.filename_str();
-      match path_str {
-          None => FileDoesntMatch,
-          Some(path_str) =>
-              if path_str.starts_with(prefix) && path_str.ends_with(suffix) {
-                  debug!("{} is a candidate", path.display());
-                  match get_metadata_section(cx.os, path) {
-                      Some(cvec) =>
-                          if !crate_matches(cvec, cx.metas, cx.hash) {
-                              debug!("skipping {}, metadata doesn't match",
-                                  path.display());
-                              FileDoesntMatch
-                          } else {
-                              debug!("found {} with matching metadata", path.display());
-                              // FIXME (#9639): This needs to handle non-utf8 paths
-                              matches.push((path.as_str().unwrap().to_owned(), cvec));
-                              FileMatches
-                          },
-                      _ => {
-                          debug!("could not load metadata for {}", path.display());
-                          FileDoesntMatch
-                      }
-                  }
-               }
-               else {
-                   FileDoesntMatch
-               }
-      }
-    });
-
-    match matches.len() {
-        0 => None,
-        1 => Some(matches[0]),
-        _ => {
-            cx.diag.span_err(
-                    cx.span, format!("multiple matching crates for `{}`", crate_name));
-                cx.diag.handler().note("candidates:");
-                for pair in matches.iter() {
-                    let ident = pair.first();
-                    let data = pair.second();
-                    cx.diag.handler().note(format!("path: {}", ident));
-                    let attrs = decoder::get_crate_attributes(data);
-                    note_linkage_attrs(cx.intr, cx.diag, attrs);
+                    if candidate && existing {
+                        FileMatches
+                    } else if candidate {
+                        match get_metadata_section(self.os, path) {
+                            Some(cvec) =>
+                                if crate_matches(cvec, self.metas, self.hash) {
+                                    debug!("found {} with matching metadata",
+                                           path.display());
+                                    let (rlib, dylib) = if file.ends_with(".rlib") {
+                                        (Some(path.clone()), None)
+                                    } else {
+                                        (None, Some(path.clone()))
+                                    };
+                                    matches.push(Library {
+                                        rlib: rlib,
+                                        dylib: dylib,
+                                        metadata: cvec,
+                                    });
+                                    FileMatches
+                                } else {
+                                    debug!("skipping {}, metadata doesn't match",
+                                           path.display());
+                                    FileDoesntMatch
+                                },
+                                _ => {
+                                    debug!("could not load metadata for {}",
+                                           path.display());
+                                    FileDoesntMatch
+                                }
+                        }
+                    } else {
+                        FileDoesntMatch
+                    }
                 }
-                cx.diag.handler().abort_if_errors();
+            }
+        }
+
+        match matches.len() {
+            0 => None,
+            1 => Some(matches[0]),
+            _ => {
+                self.diag.span_err(self.span,
+                    format!("multiple matching crates for `{}`", crate_name));
+                self.diag.handler().note("candidates:");
+                for lib in matches.iter() {
+                    match lib.dylib {
+                        Some(ref p) => {
+                            self.diag.handler().note(format!("path: {}", p.display()));
+                        }
+                        None => {}
+                    }
+                    match lib.rlib {
+                        Some(ref p) => {
+                            self.diag.handler().note(format!("path: {}", p.display()));
+                        }
+                        None => {}
+                    }
+                    let attrs = decoder::get_crate_attributes(lib.metadata);
+                    note_linkage_attrs(self.intr, self.diag, attrs);
+                }
+                self.diag.handler().abort_if_errors();
                 None
+            }
+        }
+    }
+
+    fn add_existing_rlib(&self, libs: &mut [Library],
+                         path: &Path, file: &str) -> bool {
+        let (prefix, suffix) = self.dylibname();
+        let file = file.slice_from(3); // chop off 'lib'
+        let file = file.slice_to(file.len() - 5); // chop off '.rlib'
+        let file = format!("{}{}{}", prefix, file, suffix);
+
+        for lib in libs.mut_iter() {
+            match lib.dylib {
+                Some(ref p) if p.filename_str() == Some(file.as_slice()) => {
+                    assert!(lib.rlib.is_none()); // XXX: legit compiler error
+                    lib.rlib = Some(path.clone());
+                    return true;
+                }
+                Some(*) | None => {}
+            }
+        }
+        return false;
+    }
+
+    fn add_existing_dylib(&self, libs: &mut [Library],
+                          path: &Path, file: &str) -> bool {
+        let (prefix, suffix) = self.dylibname();
+        let file = file.slice_from(prefix.len());
+        let file = file.slice_to(file.len() - suffix.len());
+        let file = format!("lib{}.rlib", file);
+
+        for lib in libs.mut_iter() {
+            match lib.rlib {
+                Some(ref p) if p.filename_str() == Some(file.as_slice()) => {
+                    assert!(lib.dylib.is_none()); // XXX: legit compiler error
+                    lib.dylib = Some(path.clone());
+                    return true;
+                }
+                Some(*) | None => {}
+            }
+        }
+        return false;
+    }
+
+    // Returns the corresponding (prefix, suffix) that files need to have for
+    // dynamic libraries
+    fn dylibname(&self) -> (&'static str, &'static str) {
+        match self.os {
+            OsWin32 => (win32::DLL_PREFIX, win32::DLL_SUFFIX),
+            OsMacos => (macos::DLL_PREFIX, macos::DLL_SUFFIX),
+            OsLinux => (linux::DLL_PREFIX, linux::DLL_SUFFIX),
+            OsAndroid => (android::DLL_PREFIX, android::DLL_SUFFIX),
+            OsFreebsd => (freebsd::DLL_PREFIX, freebsd::DLL_SUFFIX),
         }
     }
 }

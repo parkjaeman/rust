@@ -54,6 +54,9 @@ pub fn get_target_strs(target_triple: ~str, target_os: abi::Os) -> target_strs::
 
         target_triple: target_triple,
 
-        cc_args: ~[~"-m64"]
+        cc_args: match target_os {
+            abi::OsMacos => ~[~"-arch", ~"x86_64"],
+            _ => ~[~"-A", ~"x86_64"]
+        },
     };
 }

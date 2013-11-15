@@ -34,14 +34,12 @@ pub fn read_crates(diag: @mut span_handler,
                    cstore: @mut cstore::CStore,
                    filesearch: @FileSearch,
                    os: loader::Os,
-                   statik: bool,
                    intr: @ident_interner) {
     let e = @mut Env {
         diag: diag,
         filesearch: filesearch,
         cstore: cstore,
         os: os,
-        statik: statik,
         crate_cache: @mut ~[],
         next_crate_num: 1,
         intr: intr
@@ -117,7 +115,6 @@ struct Env {
     filesearch: @FileSearch,
     cstore: @mut cstore::CStore,
     os: loader::Os,
-    statik: bool,
     crate_cache: @mut ~[cache_entry],
     next_crate_num: ast::CrateNum,
     intr: @ident_interner
@@ -170,60 +167,62 @@ fn visit_view_item(e: @mut Env, i: &ast::view_item) {
 
 fn visit_item(e: &Env, i: @ast::item) {
     match i.node {
-      ast::item_foreign_mod(ref fm) => {
-        if fm.abis.is_rust() || fm.abis.is_intrinsic() {
-            return;
-        }
+        ast::item_foreign_mod(ref fm) => {
+            if fm.abis.is_rust() || fm.abis.is_intrinsic() {
+                return;
+            }
 
-        let cstore = e.cstore;
-        let link_args = i.attrs.iter()
-            .filter_map(|at| if "link_args" == at.name() {Some(at)} else {None})
-            .collect::<~[&ast::Attribute]>();
-
-        // XXX: two whom it may concern, this was the old logic applied to the
-        //      ast's extern mod blocks which had names (we used to allow
-        //      "extern mod foo"). This code was never run for anonymous blocks,
-        //      and we now only have anonymous blocks. We're still in the midst
-        //      of figuring out what the exact operations we'd like to support
-        //      when linking external modules, but I wanted to leave this logic
-        //      here for the time beging to refer back to it
-
-        //let mut already_added = false;
-        //let link_name = i.attrs.iter()
-        //    .find(|at| "link_name" == at.name())
-        //    .and_then(|at| at.value_str());
-
-        //let foreign_name = match link_name {
-        //        Some(nn) => {
-        //            if nn.is_empty() {
-        //                e.diag.span_fatal(
-        //                    i.span,
-        //                    "empty #[link_name] not allowed; use \
-        //                     #[nolink].");
-        //            }
-        //            nn
-        //        }
-        //        None => token::ident_to_str(&i.ident)
-        //    };
-        //if !attr::contains_name(i.attrs, "nolink") {
-        //    already_added =
-        //        !cstore::add_used_library(cstore, foreign_name);
-        //}
-        //if !link_args.is_empty() && already_added {
-        //    e.diag.span_fatal(i.span, ~"library '" + foreign_name +
-        //               "' already added: can't specify link_args.");
-        //}
-
-        for m in link_args.iter() {
-            match m.value_str() {
-                Some(linkarg) => {
-                    cstore::add_used_link_args(cstore, linkarg);
+            // First, add all of the custom link_args attributes
+            let cstore = e.cstore;
+            let link_args = i.attrs.iter()
+                .filter_map(|at| if "link_args" == at.name() {Some(at)} else {None})
+                .to_owned_vec();
+            for m in link_args.iter() {
+                match m.value_str() {
+                    Some(linkarg) => {
+                        cstore::add_used_link_args(cstore, linkarg);
+                    }
+                    None => { /* fallthrough */ }
                 }
-                None => { /* fallthrough */ }
+            }
+
+            // Next, process all of the #[link(..)]-style arguments
+            let cstore = e.cstore;
+            let link_args = i.attrs.iter()
+                .filter_map(|at| if "link" == at.name() {Some(at)} else {None})
+                .to_owned_vec();
+            for m in link_args.iter() {
+                match m.meta_item_list() {
+                    Some(items) => {
+                        let kind = do items.iter().find |k| {
+                            "kind" == k.name()
+                        }.and_then(|a| a.value_str());
+                        let kind = match kind {
+                            Some(k) if "static" == k => cstore::NativeStatic,
+                            Some(k) => {
+                                e.diag.span_fatal(i.span,
+                                    format!("unknown kind: `{}`", k));
+                            }
+                            None => cstore::NativeUnknown
+                        };
+                        let n = do items.iter().find |n| {
+                            "name" == n.name()
+                        }.and_then(|a| a.value_str());
+                        let n = match n {
+                            Some(n) => n,
+                            None => {
+                                e.diag.span_fatal(i.span,
+                                    "#[link(...)] specified without \
+                                     `name = \"foo\"`");
+                            }
+                        };
+                        cstore::add_used_library(cstore, n.to_owned(), kind);
+                    }
+                    None => {}
+                }
             }
         }
-      }
-      _ => { }
+        _ => { }
     }
 }
 
@@ -270,17 +269,15 @@ fn resolve_crate(e: @mut Env,
             metas: metas,
             hash: hash,
             os: e.os,
-            is_static: e.statik,
             intr: e.intr
         };
-        let (lident, ldata) = loader::load_library_crate(&load_ctxt);
+        let loader::Library {
+            dylib, rlib, metadata
+        } = load_ctxt.load_library_crate();
 
-        let cfilename = Path::new(lident);
-        let cdata = ldata;
-
-        let attrs = decoder::get_crate_attributes(cdata);
+        let attrs = decoder::get_crate_attributes(metadata);
         let linkage_metas = attr::find_linkage_metas(attrs);
-        let hash = decoder::get_crate_hash(cdata);
+        let hash = decoder::get_crate_hash(metadata);
 
         // Claim this crate number and cache it
         let cnum = e.next_crate_num;
@@ -293,7 +290,7 @@ fn resolve_crate(e: @mut Env,
         e.next_crate_num += 1;
 
         // Now resolve the crates referenced by this crate
-        let cnum_map = resolve_crate_deps(e, cdata);
+        let cnum_map = resolve_crate_deps(e, metadata);
 
         let cname =
             match attr::last_meta_item_value_str_by_name(load_ctxt.metas,
@@ -303,14 +300,18 @@ fn resolve_crate(e: @mut Env,
             };
         let cmeta = @cstore::crate_metadata {
             name: cname,
-            data: cdata,
+            data: metadata,
             cnum_map: cnum_map,
             cnum: cnum
         };
 
         let cstore = e.cstore;
         cstore::set_crate_data(cstore, cnum, cmeta);
-        cstore::add_used_crate_file(cstore, &cfilename);
+        cstore::add_used_crate_source(cstore, cstore::CrateSource {
+            dylib: dylib,
+            rlib: rlib,
+            cnum: cnum,
+        });
         return cnum;
       }
       Some(cnum) => {

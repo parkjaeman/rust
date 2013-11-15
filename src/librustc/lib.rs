@@ -16,7 +16,8 @@
 
 #[comment = "The Rust compiler"];
 #[license = "MIT/ASL2"];
-#[crate_type = "lib"];
+#[crate_type = "lib"]; // remove after stage0
+#[crate_type = "dylib"];
 
 #[feature(macro_rules, globs, struct_variant, managed_boxes)];
 #[allow(unrecognized_lint)]; // NOTE: remove after the next snapshot
