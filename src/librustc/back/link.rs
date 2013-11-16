@@ -1107,9 +1107,6 @@ pub fn link_args(sess: Session,
         session::OutputExecutable | session::OutputDylib => {
             // Stack growth requires statically linking a __morestack function
             args.push(~"-lmorestack");
-            // LLVM will emit calls to things like _upcall_reset_stack_limit and
-            // the personality function. These are provided inside of rustrt
-            args.push(~"-lrustrt");
 
             // FIXME (#2397): At some point we want to rpath our guesses as to
             // where extern libraries might live, based on the
