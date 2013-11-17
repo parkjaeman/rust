@@ -284,7 +284,8 @@ check-stage$(1)-T-$(2)-H-$(3)-exec:     				\
 	check-stage$(1)-T-$(2)-H-$(3)-rfail-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-cfail-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-rpass-full-exec			\
-        check-stage$(1)-T-$(2)-H-$(3)-crates-exec                      \
+	check-stage$(1)-T-$(2)-H-$(3)-rmake-exec			\
+        check-stage$(1)-T-$(2)-H-$(3)-crates-exec                       \
 	check-stage$(1)-T-$(2)-H-$(3)-bench-exec			\
 	check-stage$(1)-T-$(2)-H-$(3)-debuginfo-exec \
 	check-stage$(1)-T-$(2)-H-$(3)-codegen-exec \
@@ -770,6 +771,7 @@ TEST_GROUPS = \
 	cfail \
 	bench \
 	perf \
+	rmake \
 	debuginfo \
 	codegen \
 	doc \
@@ -900,3 +902,36 @@ endef
 
 $(foreach host,$(CFG_HOST),			\
  $(eval $(call DEF_CHECK_FAST_FOR_H,$(host))))
+
+RMAKE_TESTS := $(shell ls -d src/test/run-make/*/)
+RMAKE_TESTS := $(RMAKE_TESTS:src/test/run-make/%/=%)
+RMAKE_DEPS := src/test/run-make/c-dynamic-rlib/Makefile
+
+define DEF_RMAKE_FOR_T_H
+# $(1) the stage
+# $(2) target triple
+# $(3) host triple
+
+check-stage$(1)-T-$(2)-H-$(3)-rmake-exec: \
+		$$(call TEST_OK_FILE,$(1),$(2),$(3),rmake)
+
+$$(call TEST_OK_FILE,$(1),$(2),$(3),rmake): \
+		$$(RMAKE_TESTS:%=$(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok)
+	@touch $$@
+
+$(3)/test/run-make/%-$(1)-T-$(2)-H-$(3).ok: \
+		src/test/run-make/%/Makefile \
+		$(3)/stage$(1)/bin/rustc$$(X_$(3))
+	@mkdir -p $(3)/test/run-make/$$*
+	@echo maketest: $$*
+	@python src/etc/maketest.py $$(dir $$<) \
+	    $(S)/$(3)/stage$(1)/bin/rustc$$(X_$(3)) \
+	    $(S)/$(3)/test/run-make/$$*
+	@touch $$@
+
+endef
+
+$(foreach stage,$(STAGES), \
+ $(foreach target,$(CFG_TARGET), \
+  $(foreach host,$(CFG_HOST), \
+   $(eval $(call DEF_RMAKE_FOR_T_H,$(stage),$(target),$(host))))))
