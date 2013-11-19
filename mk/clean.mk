@@ -59,6 +59,7 @@ clean-generic-$(2)-$(1):
 	$(Q)find $(1)/rustllvm \
 	         $(1)/rt \
 		 $(1)/test \
+		 $(1)/stage* \
          -name '*.[odasS]' -o \
          -name '*.so' -o      \
          -name '*.dylib' -o   \

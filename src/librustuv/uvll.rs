@@ -722,7 +722,7 @@ extern {
     pub fn uv_signal_stop(handle: *uv_signal_t) -> c_int;
 }
 
-// libuv requires pthreads to be available platforms, and :w
+// various platform libraries required by libuv
 #[cfg(not(stage0))]
 #[link(name = "pthread")]
 extern {}
@@ -737,4 +737,11 @@ extern {}
 extern {}
 #[cfg(target_os = "win32", stage0)]
 #[link_args = "-lWs2_32 -lpsapi -liphlpapi"]
+extern {}
+
+#[cfg(target_os = "freebsd", not(stage0))]
+#[link(name = "kvm")]
+extern {}
+#[cfg(target_os = "freebsd", stage0)]
+#[link_args = "-lkvm"]
 extern {}

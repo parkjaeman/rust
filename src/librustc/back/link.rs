@@ -30,7 +30,6 @@ use std::os::consts::{macos, freebsd, linux, android, win32};
 use std::ptr;
 use std::run;
 use std::str;
-use std::vec;
 use std::io::fs;
 use syntax::abi;
 use syntax::ast;
@@ -354,20 +353,20 @@ pub mod write {
     }
 
     pub fn run_assembler(sess: Session, assembly: &Path, object: &Path) {
-        let cc_prog = super::get_cc_prog(sess, session::OutputExecutable);
+        let (cc, mut args) = super::get_cc_prog(sess, session::OutputExecutable);
 
         // FIXME (#9639): This needs to handle non-utf8 paths
-        let cc_args = ~[
+        args.push_all([
             ~"-c",
             ~"-o", object.as_str().unwrap().to_owned(),
-            assembly.as_str().unwrap().to_owned()];
+            assembly.as_str().unwrap().to_owned()]);
 
-        let prog = run::process_output(cc_prog, cc_args);
+        debug!("{} {}", cc, args.connect(" "));
+        let prog = run::process_output(cc, args);
 
         if !prog.status.success() {
-            sess.err(format!("linking with `{}` failed: {}", cc_prog, prog.status));
-            sess.note(format!("{} arguments: {}",
-                        cc_prog, cc_args.connect(" ")));
+            sess.err(format!("linking with `{}` failed: {}", cc, prog.status));
+            sess.note(format!("{} arguments: {}", cc, args.connect(" ")));
             sess.note(str::from_utf8(prog.error + prog.output));
             sess.abort_if_errors();
         }
@@ -866,9 +865,13 @@ pub fn output_lib_filename(lm: LinkMeta) -> ~str {
     format!("{}-{}-{}", lm.name, lm.extras_hash, lm.vers)
 }
 
-pub fn get_cc_prog(sess: Session, output: session::OutputStyle) -> ~str {
+pub fn get_cc_prog(sess: Session,
+                   output: session::OutputStyle) -> (~str, ~[~str]) {
+    let lda = sess.targ_cfg.target_strs.ld_args.as_slice();
+    let cca = sess.targ_cfg.target_strs.cc_args.as_slice();
+
     match sess.opts.linker {
-        Some(ref linker) => return linker.to_str(),
+        Some(ref linker) => return (linker.to_str(), ~[]),
         None => {}
     }
 
@@ -883,9 +886,11 @@ pub fn get_cc_prog(sess: Session, output: session::OutputStyle) -> ~str {
         abi::OsAndroid => match sess.opts.android_cross_path {
             Some(ref path) => match output {
                 session::OutputExecutable | session::OutputDylib =>
-                    format!("{}/bin/arm-linux-androideabi-gcc", *path),
+                    (format!("{}/bin/arm-linux-androideabi-gcc", *path),
+                     cca.to_owned()),
                 session::OutputRlib | session::OutputStaticlib =>
-                    format!("{}/bin/arm-linux-androideabi-ld", *path),
+                    (format!("{}/bin/arm-linux-androideabi-ld", *path),
+                     lda.to_owned())
             },
             None => {
                 sess.fatal("need Android NDK path for linking \
@@ -893,11 +898,14 @@ pub fn get_cc_prog(sess: Session, output: session::OutputStyle) -> ~str {
             }
         },
         abi::OsWin32 if output == session::OutputExecutable ||
-                        output == session::OutputDylib => ~"g++",
+                        output == session::OutputDylib =>
+            (~"g++", cca.to_owned()),
 
         _ => match output {
-            session::OutputRlib | session::OutputStaticlib => ~"ld",
-            session::OutputExecutable | session::OutputDylib => ~"cc",
+            session::OutputRlib | session::OutputStaticlib =>
+                (~"ld", lda.to_owned()),
+            session::OutputExecutable | session::OutputDylib =>
+                (~"cc", cca.to_owned()),
         }
     }
 }
@@ -972,8 +980,8 @@ pub fn link_binary_output(sess: Session,
     };
 
     // The invocations of cc share some flags across platforms
-    let cc_prog = get_cc_prog(sess, output);
-    let cc_args = link_args(sess, output, obj_filename, &out_filename);
+    let (cc_prog, mut cc_args) = get_cc_prog(sess, output);
+    cc_args.push_all_move(link_args(sess, output, obj_filename, &out_filename));
     if (sess.opts.debugging_opts & session::print_link_args) != 0 {
         println!("{} link args: {}", cc_prog, cc_args.connect(" "));
     }
@@ -1062,7 +1070,7 @@ pub fn link_args(sess: Session,
     let lib_path = sess.filesearch.get_target_lib_path();
     let stage: ~str = ~"-L" + lib_path.as_str().unwrap();
 
-    let mut args = vec::append(~[stage], sess.targ_cfg.target_strs.cc_args);
+    let mut args = ~[stage];
 
     // FIXME (#9639): This needs to handle non-utf8 paths
     args.push_all([
@@ -1081,6 +1089,7 @@ pub fn link_args(sess: Session,
         session::OutputDylib => {
             // On mac we need to tell the linker to let this library be rpathed
             if sess.targ_cfg.os == abi::OsMacos {
+                args.push(~"-dynamiclib");
                 args.push(~"-Wl,-dylib");
                 // FIXME (#9639): This needs to handle non-utf8 paths
                 args.push(~"-Wl,-install_name,@rpath/" +

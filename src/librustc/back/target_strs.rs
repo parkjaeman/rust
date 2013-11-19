@@ -14,5 +14,6 @@ pub struct t {
     meta_sect_name: ~str,
     data_layout: ~str,
     target_triple: ~str,
-    cc_args: ~[~str]
+    cc_args: ~[~str],
+    ld_args: ~[~str],
 }
