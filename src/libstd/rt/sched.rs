@@ -25,7 +25,8 @@ use rt::local::Local;
 use rt::rtio::{RemoteCallback, PausibleIdleCallback, Callback};
 use borrow::{to_uint};
 use cell::Cell;
-use rand::{XorShiftRng, Rng, Rand};
+//use rand::{XorShiftRng, Rng, Rand};
+use rand::{XorShiftRng, Rand};
 use iter::range;
 use vec::{OwnedVector};
 
@@ -93,6 +94,8 @@ pub struct Scheduler {
 
     /// The event loop used to drive the scheduler and perform I/O
     event_loop: ~EventLoop,
+
+    index: uint,
 }
 
 /// An indication of how hard to work on a given operation, the difference
@@ -150,7 +153,8 @@ impl Scheduler {
             rng: new_sched_rng(),
             idle_callback: None,
             yield_check_count: 0,
-            steal_for_yield: false
+            steal_for_yield: false,
+            index: 0
         };
 
         sched.yield_check_count = reset_yield_check(&mut sched.rng);
@@ -197,7 +201,6 @@ impl Scheduler {
         // action will have given it away.
         let sched: ~Scheduler = Local::take();
 
-        rtdebug!("starting scheduler {}", sched.sched_id());
         sched.run();
 
         // Close the idle callback.
@@ -213,7 +216,6 @@ impl Scheduler {
         // the cleanup code it runs.
         let mut stask: ~Task = Local::take();
 
-        rtdebug!("stopping scheduler {}", stask.sched.get_ref().sched_id());
 
         // Should not have any messages
         let message = stask.sched.get_mut_ref().message_queue.pop();
@@ -289,14 +291,12 @@ impl Scheduler {
         // Generate a SchedHandle and push it to the sleeper list so
         // somebody can wake us up later.
         if !sched.sleepy && !sched.no_sleep {
-            rtdebug!("scheduler has no work to do, going to sleep");
             sched.sleepy = true;
             let handle = sched.make_handle();
             sched.sleeper_list.push(handle);
             // Since we are sleeping, deactivate the idle callback.
             sched.idle_callback.get_mut_ref().pause();
         } else {
-            rtdebug!("not sleeping, already doing so or no_sleep set");
             // We may not be sleeping, but we still need to deactivate
             // the idle callback.
             sched.idle_callback.get_mut_ref().pause();
@@ -328,7 +328,6 @@ impl Scheduler {
                 return None;
             }
             Some(TaskFromFriend(task)) => {
-                rtdebug!("got a task from a friend. lovely!");
                 self.process_task(task, Scheduler::resume_task_immediately_cl);
                 return None;
             }
@@ -344,7 +343,6 @@ impl Scheduler {
                 return None;
             }
             Some(Shutdown) => {
-                rtdebug!("shutting down");
                 if self.sleepy {
                     // There may be an outstanding handle on the
                     // sleeper list.  Pop them all to make sure that's
@@ -373,15 +371,12 @@ impl Scheduler {
     }
 
     fn do_work(mut ~self) -> Option<~Scheduler> {
-        rtdebug!("scheduler calling do work");
         match self.find_work() {
             Some(task) => {
-                rtdebug!("found some work! processing the task");
                 self.process_task(task, Scheduler::resume_task_immediately_cl);
                 return None;
             }
             None => {
-                rtdebug!("no work was found, returning the scheduler struct");
                 return Some(self);
             }
         }
@@ -397,15 +392,13 @@ impl Scheduler {
     // that by first checking the local queue, and if there is no work
     // there, trying to steal from the remote work queues.
     fn find_work(&mut self) -> Option<~Task> {
-        rtdebug!("scheduler looking for work");
         if !self.steal_for_yield {
             match self.work_queue.pop() {
                 Some(task) => {
-                    rtdebug!("found a task locally");
+                    //rtdebug!("Pop<{:?}={:?}>", self.index as uint, to_uint(task) as uint);
                     return Some(task)
                 }
                 None => {
-                    rtdebug!("scheduler trying to steal");
                     return self.try_steals();
                 }
             }
@@ -419,11 +412,9 @@ impl Scheduler {
             self.steal_for_yield = false;
             match self.try_steals() {
                 Some(task) => {
-                    rtdebug!("stole a task after yielding");
                     return Some(task);
                 }
                 None => {
-                    rtdebug!("did not steal a task after yielding");
                     // Back to business
                     return self.find_work();
                 }
@@ -437,17 +428,25 @@ impl Scheduler {
     fn try_steals(&mut self) -> Option<~Task> {
         let work_queues = &mut self.work_queues;
         let len = work_queues.len();
-        let start_index = self.rng.gen_range(0, len);
-        for index in range(0, len).map(|i| (i + start_index) % len) {
-            match work_queues[index].steal() {
+        let mut max_depth = -1;
+        let mut max_depth_index = 0;
+        for i in range(0, len) {
+            let depth = work_queues[i].depth_to_steal();
+            if depth > max_depth {
+                max_depth = depth;
+                max_depth_index = i;
+            }
+        }
+
+        if max_depth >= 0 {
+            match work_queues[max_depth_index].steal() {
                 deque::Data(task) => {
-                    rtdebug!("found task by stealing");
+                    //rtdebug!("Steal({:?}-{:?}-{:?})", self.index as int, max_depth_index as int, to_uint(task) as int);
                     return Some(task)
                 }
                 _ => ()
             }
-        };
-        rtdebug!("giving up on stealing");
+        }
         return None;
     }
 
@@ -455,29 +454,24 @@ impl Scheduler {
     // place.
 
     fn process_task(mut ~self, mut task: ~Task, schedule_fn: SchedulingFn) {
-        rtdebug!("processing a task");
 
         let home = task.take_unwrap_home();
         match home {
             Sched(home_handle) => {
                 if home_handle.sched_id != self.sched_id() {
-                    rtdebug!("sending task home");
                     task.give_home(Sched(home_handle));
                     Scheduler::send_task_home(task);
                     Local::put(self);
                 } else {
-                    rtdebug!("running task here");
                     task.give_home(Sched(home_handle));
                     schedule_fn(self, task);
                 }
             }
             AnySched if self.run_anything => {
-                rtdebug!("running anysched task here");
                 task.give_home(AnySched);
                 schedule_fn(self, task);
             }
             AnySched => {
-                rtdebug!("sending task to friend");
                 task.give_home(AnySched);
                 self.send_to_friend(task);
                 Local::put(self);
@@ -501,7 +495,6 @@ impl Scheduler {
     /// Take a non-homed task we aren't allowed to run here and send
     /// it to the designated friend scheduler to execute.
     fn send_to_friend(&mut self, task: ~Task) {
-        rtdebug!("sending a task to friend");
         match self.friend_handle {
             Some(ref mut handle) => {
                 handle.send(TaskFromFriend(task));
@@ -520,6 +513,7 @@ impl Scheduler {
     pub fn enqueue_task(&mut self, task: ~Task) {
 
         // We push the task onto our local queue clone.
+        //rtdebug!("Enqueue[{:?}*{:?}]", self.index as f64, to_uint(task) as f64);
         self.work_queue.push(task);
         self.idle_callback.get_mut_ref().resume();
 
@@ -711,6 +705,8 @@ impl Scheduler {
 
     pub fn run_task(task: ~Task) {
         let sched: ~Scheduler = Local::take();
+        //rtdebug!("Run&{:?}+{:?}+{:?}&", sched.index as f32, to_uint(task) as f32, task.depth as f32);
+        //rtdebug!("Run at {}", sched.index);
         sched.process_task(task, Scheduler::switch_task);
     }
 
@@ -903,7 +899,6 @@ mod test {
         let task_ran_ptr: *mut bool = &mut task_ran;
         do run_in_newsched_task || {
             unsafe { *task_ran_ptr = true };
-            rtdebug!("executed from the new scheduler")
         }
         assert!(task_ran);
     }
@@ -1042,7 +1037,6 @@ mod test {
                                                  Sched(t1_handle)) || {
                 rtassert!(Task::on_appropriate_sched());
             };
-            rtdebug!("task1 id: **{}**", borrow::to_uint(task1));
 
             let task2 = ~do Task::new_root(&mut normal_sched.stack_pool, None) {
                 rtassert!(Task::on_appropriate_sched());
@@ -1056,7 +1050,6 @@ mod test {
                                                  Sched(t4_handle)) {
                 rtassert!(Task::on_appropriate_sched());
             };
-            rtdebug!("task4 id: **{}**", borrow::to_uint(task4));
 
             let task1 = Cell::new(task1);
             let task2 = Cell::new(task2);
@@ -1069,11 +1062,8 @@ mod test {
             let chan = Cell::new(chan);
 
             let normal_task = ~do Task::new_root(&mut normal_sched.stack_pool, None) {
-                rtdebug!("*about to submit task2*");
                 Scheduler::run_task(task2.take());
-                rtdebug!("*about to submit task4*");
                 Scheduler::run_task(task4.take());
-                rtdebug!("*normal_task done*");
                 port.take().recv();
                 let mut nh = normal_handle.take();
                 nh.send(Shutdown);
@@ -1081,18 +1071,13 @@ mod test {
                 sh.send(Shutdown);
             };
 
-            rtdebug!("normal task: {}", borrow::to_uint(normal_task));
 
             let special_task = ~do Task::new_root(&mut special_sched.stack_pool, None) {
-                rtdebug!("*about to submit task1*");
                 Scheduler::run_task(task1.take());
-                rtdebug!("*about to submit task3*");
                 Scheduler::run_task(task3.take());
-                rtdebug!("*done with special_task*");
                 chan.take().send(());
             };
 
-            rtdebug!("special task: {}", borrow::to_uint(special_task));
 
             let special_sched = Cell::new(special_sched);
             let normal_sched = Cell::new(normal_sched);
@@ -1101,12 +1086,10 @@ mod test {
 
             let normal_thread = do Thread::start {
                 normal_sched.take().bootstrap(normal_task.take());
-                rtdebug!("finished with normal_thread");
             };
 
             let special_thread = do Thread::start {
                 special_sched.take().bootstrap(special_task.take());
-                rtdebug!("finished with special_sched");
             };
 
             normal_thread.join();

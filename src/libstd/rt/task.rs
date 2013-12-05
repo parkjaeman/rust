@@ -17,7 +17,6 @@ use super::local_heap::LocalHeap;
 
 use prelude::*;
 
-use borrow;
 use cast::transmute;
 use cell::Cell;
 use cleanup;
@@ -59,6 +58,7 @@ pub struct Task {
     // Dynamic borrowck debugging info
     borrow_list: Option<~[BorrowRecord]>,
     stdout_handle: Option<~Writer>,
+    depth: int,
 }
 
 pub enum TaskType {
@@ -133,6 +133,9 @@ impl Unwinder {
 }
 
 impl Task {
+    pub fn get_depth(&self) -> int {
+        self.depth
+    }
 
     // A helper to build a new task using the dynamically found
     // scheduler and task. Only works in GreenTask context.
@@ -193,6 +196,7 @@ impl Task {
             task_type: SchedTask,
             borrow_list: None,
             stdout_handle: None,
+            depth: 0,
         }
     }
 
@@ -227,6 +231,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
+            depth: 0,
         }
     }
 
@@ -249,6 +254,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
+            depth: (self.depth + 1),
         }
     }
 
@@ -276,7 +282,6 @@ impl Task {
     }
 
     pub fn run(&mut self, f: ||) {
-        rtdebug!("run called on task: {}", borrow::to_uint(self));
 
         // The only try/catch block in the world. Attempt to run the task's
         // client-specified code and catch any failures.
@@ -369,11 +374,9 @@ impl Task {
             let sched_run_anything = task.sched.get_ref().run_anything;
             match task.task_type {
                 GreenTask(Some(AnySched)) => {
-                    rtdebug!("anysched task in sched check ****");
                     sched_run_anything
                 }
                 GreenTask(Some(Sched(SchedHandle { sched_id: ref id, ..}))) => {
-                    rtdebug!("homed task in sched check ****");
                     *id == sched_id
                 }
                 GreenTask(None) => {
@@ -389,7 +392,6 @@ impl Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
-        rtdebug!("called drop for a task: {}", borrow::to_uint(self));
         rtassert!(self.destroyed);
     }
 }
@@ -713,10 +715,8 @@ mod test {
     fn unwind() {
         do run_in_newsched_task() {
             let result = spawntask_try(proc()());
-            rtdebug!("trying first assert");
             assert!(result.is_ok());
             let result = spawntask_try(proc() fail!());
-            rtdebug!("trying second assert");
             assert!(result.is_err());
         }
     }

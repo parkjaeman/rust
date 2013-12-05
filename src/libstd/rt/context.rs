@@ -95,7 +95,6 @@ impl Context {
     then loading the registers from a previously saved Context.
     */
     pub fn swap(out_context: &mut Context, in_context: &Context) {
-        rtdebug!("swapping contexts");
         let out_regs: &mut Registers = match out_context {
             &Context { regs: ~ref mut r, .. } => r
         };
@@ -103,7 +102,6 @@ impl Context {
             &Context { regs: ~ref r, .. } => r
         };
 
-        rtdebug!("noting the stack limit and doing raw swap");
 
         unsafe {
             // Right before we switch to the new context, set the new context's
@@ -215,10 +213,6 @@ fn initialize_call_frame(regs: &mut Registers, fptr: *c_void, arg: *c_void,
     // The final return address. 0 indicates the bottom of the stack
     unsafe { *sp = 0; }
 
-    rtdebug!("creating call frame");
-    rtdebug!("fptr {}", fptr);
-    rtdebug!("arg {}", arg);
-    rtdebug!("sp {}", sp);
 
     regs[RUSTRT_ARG0] = arg as uint;
     regs[RUSTRT_RSP] = sp as uint;

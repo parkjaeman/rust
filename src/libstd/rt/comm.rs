@@ -251,7 +251,6 @@ impl<T: Send> SelectInner for PortOne<T> {
             match oldstate {
                 STATE_BOTH => {
                     // Data has not been sent. Now we're blocked.
-                    rtdebug!("non-rendezvous recv");
                     false
                 }
                 STATE_ONE => {
@@ -266,7 +265,6 @@ impl<T: Send> SelectInner for PortOne<T> {
                     // maybe should be optimized out with a cfg(test) anyway?
                     (*self.packet()).state.store(STATE_ONE, Relaxed);
 
-                    rtdebug!("rendezvous recv");
 
                     // Channel is closed. Switch back and check the data.
                     // NB: We have to drop back into the scheduler event loop here
@@ -761,7 +759,6 @@ mod test {
                 port.recv();
             };
             // What is our res?
-            rtdebug!("res is: {:?}", res.is_err());
             assert!(res.is_err());
         }
     }

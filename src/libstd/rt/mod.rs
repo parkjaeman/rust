@@ -291,8 +291,8 @@ fn run_(main: proc(), use_main_sched: bool) -> int {
     // sent the Shutdown message to terminate the schedulers.
     let mut handles = ~[];
 
+    let mut index = 0;
     for worker in workers.move_iter() {
-        rtdebug!("inserting a regular scheduler");
 
         // Every scheduler is driven by an I/O event loop.
         let loop_ = new_event_loop();
@@ -302,8 +302,10 @@ fn run_(main: proc(), use_main_sched: bool) -> int {
                                         sleepers.clone());
         let handle = sched.make_handle();
 
+        sched.index = index;
         scheds.push(sched);
         handles.push(handle);
+        index += 1;
     }
 
     // If we need a main-thread task then create a main thread scheduler
@@ -400,12 +402,10 @@ fn run_(main: proc(), use_main_sched: bool) -> int {
 
     // Run each remaining scheduler in a thread.
     for sched in scheds.move_rev_iter() {
-        rtdebug!("creating regular schedulers");
         let sched_cell = Cell::new(sched);
         let thread = do Thread::start {
             let mut sched = sched_cell.take();
             let bootstrap_task = ~do Task::new_root(&mut sched.stack_pool, None) || {
-                rtdebug!("boostraping a non-primary scheduler");
             };
             sched.bootstrap(bootstrap_task);
         };
@@ -416,7 +416,6 @@ fn run_(main: proc(), use_main_sched: bool) -> int {
 
     if use_main_sched {
 
-        rtdebug!("about to create the main scheduler task");
 
         let mut main_sched = main_sched.unwrap();
 
@@ -425,12 +424,10 @@ fn run_(main: proc(), use_main_sched: bool) -> int {
                                                   home, main.take());
         main_task.name = Some(SendStrStatic("<main>"));
         main_task.death.on_exit = Some(on_exit.take());
-        rtdebug!("bootstrapping main_task");
 
         main_sched.bootstrap(main_task);
     }
 
-    rtdebug!("waiting for threads");
 
     // Wait for schedulers
     for thread in threads.move_iter() {

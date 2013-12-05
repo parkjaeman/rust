@@ -42,14 +42,12 @@ impl<T> Tube<T> {
     }
 
     pub fn send(&mut self, val: T) {
-        rtdebug!("tube send");
         unsafe {
             let state = self.p.unsafe_borrow_mut();
             (*state).buf.push(val);
 
             if (*state).blocked_task.is_some() {
                 // There's a waiting task. Wake it up
-                rtdebug!("waking blocked tube");
                 let task = (*state).blocked_task.take_unwrap();
                 let sched: ~Scheduler = Local::take();
                 sched.resume_blocked_task_immediately(task);
@@ -64,14 +62,12 @@ impl<T> Tube<T> {
                 return (*state).buf.shift();
             } else {
                 // Block and wait for the next message
-                rtdebug!("blocking on tube recv");
                 assert!(self.p.refcount() > 1); // There better be somebody to wake us up
                 assert!((*state).blocked_task.is_none());
                 let sched: ~Scheduler = Local::take();
                 sched.deschedule_running_task_and_then(|_, task| {
                     (*state).blocked_task = Some(task);
                 });
-                rtdebug!("waking after tube recv");
                 let buf = &mut (*state).buf;
                 assert!(!buf.is_empty());
                 return buf.shift();
