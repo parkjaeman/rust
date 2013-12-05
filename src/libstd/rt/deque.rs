@@ -59,6 +59,7 @@ use option::{Option, Some, None};
 use ptr;
 use unstable::atomics::{AtomicInt, AtomicPtr, SeqCst};
 use unstable::sync::{UnsafeArc, Exclusive};
+use rt::task::Task;
 
 // Once the queue is less than 1/K full, then it will be downsized. Note that
 // the deque requires that this number be less than 2.
@@ -205,6 +206,12 @@ impl<T: Send> Stealer<T> {
         unsafe { (*self.deque.get()).steal() }
     }
 
+    
+    pub fn depth_to_steal(&self) -> int {
+        unsafe { (*self.deque.get()).depth_to_steal() }
+    }
+    
+
     /// Gets access to the buffer pool that this stealer is attached to. This
     /// can be used to create more deques which share the same buffer pool as
     /// this deque.
@@ -293,6 +300,25 @@ impl<T: Send> Deque<T> {
             cast::forget(data); // someone else stole this value
             Abort
         }
+    }
+
+    unsafe fn depth_to_steal(&mut self) -> int {
+        let t = self.top.load(SeqCst);
+        let old = self.array.load(SeqCst);
+        let b = self.bottom.load(SeqCst);
+        let a = self.array.load(SeqCst);
+        let size = b - t;
+        if size <= 0 { return -1 }
+        if size % (*a).size() == 0 {
+            if a == old && t == self.top.load(SeqCst) {
+                return -1
+            }
+            return -2
+        }
+        let data: ~Task = cast::transmute((*a).get(t));
+        let depth = data.get_depth();
+        cast::forget(data);
+        depth
     }
 
     unsafe fn maybe_shrink(&mut self, b: int, t: int) {

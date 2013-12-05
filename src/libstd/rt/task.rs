@@ -59,6 +59,7 @@ pub struct Task {
     // Dynamic borrowck debugging info
     borrow_list: Option<~[BorrowRecord]>,
     stdout_handle: Option<~Writer>,
+    depth: int,
 }
 
 pub enum TaskType {
@@ -133,6 +134,9 @@ impl Unwinder {
 }
 
 impl Task {
+    pub fn get_depth(&self) -> int {
+        self.depth
+    }
 
     // A helper to build a new task using the dynamically found
     // scheduler and task. Only works in GreenTask context.
@@ -193,6 +197,7 @@ impl Task {
             task_type: SchedTask,
             borrow_list: None,
             stdout_handle: None,
+            depth: 0,
         }
     }
 
@@ -227,6 +232,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
+            depth: 0,
         }
     }
 
@@ -249,6 +255,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
+            depth: (self.depth + 1),
         }
     }
 

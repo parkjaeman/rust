@@ -25,7 +25,8 @@ use rt::local::Local;
 use rt::rtio::{RemoteCallback, PausibleIdleCallback, Callback};
 use borrow::{to_uint};
 use cell::Cell;
-use rand::{XorShiftRng, Rng, Rand};
+//use rand::{XorShiftRng, Rng, Rand};
+use rand::{XorShiftRng, Rand};
 use iter::range;
 use vec::{OwnedVector};
 
@@ -434,19 +435,52 @@ impl Scheduler {
     // Try stealing from all queues the scheduler knows about. This
     // naive implementation can steal from our own queue or from other
     // special schedulers.
+
+    /*
     fn try_steals(&mut self) -> Option<~Task> {
         let work_queues = &mut self.work_queues;
         let len = work_queues.len();
         let start_index = self.rng.gen_range(0, len);
         for index in range(0, len).map(|i| (i + start_index) % len) {
+            //let depth = work_queues[index].depth_to_steal();
+            //debug!("In try_steals(), depth = {:?}", depth);
             match work_queues[index].steal() {
                 deque::Data(task) => {
+                    let depth = task.get_depth();
+                    println!("In try_steals(), depth, 1 = {:?}", depth);
                     rtdebug!("found task by stealing");
                     return Some(task)
                 }
                 _ => ()
             }
         };
+        rtdebug!("giving up on stealing");
+        return None;
+    }
+    */
+
+    fn try_steals(&mut self) -> Option<~Task> {
+        let work_queues = &mut self.work_queues;
+        let len = work_queues.len();
+        let mut max_depth = -1;
+        let mut max_depth_index = 0;
+        for i in range(0, len) {
+            let depth = work_queues[i].depth_to_steal();
+            if depth > max_depth {
+                max_depth = depth;
+                max_depth_index = i;
+            }
+        }
+
+        if max_depth >= 0 {
+            match work_queues[max_depth_index].steal() {
+                deque::Data(task) => {
+                    rtdebug!("found task by stealing");
+                    return Some(task)
+                }
+                _ => ()
+            }
+        }
         rtdebug!("giving up on stealing");
         return None;
     }
