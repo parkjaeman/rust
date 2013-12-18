@@ -441,12 +441,13 @@ impl Scheduler {
         if max_depth >= 0 {
             match work_queues[max_depth_index].steal() {
                 deque::Data(task) => {
-                    //rtdebug!("Steal({:?}-{:?}-{:?})", self.index as int, max_depth_index as int, to_uint(task) as int);
+                    rtdebug!("found task by stealing");
                     return Some(task)
                 }
                 _ => ()
             }
         }
+        rtdebug!("giving up on stealing");
         return None;
     }
 
