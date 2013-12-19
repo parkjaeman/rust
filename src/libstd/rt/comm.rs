@@ -21,7 +21,7 @@ use rt::local::Local;
 use rt::select::{SelectInner, SelectPortInner};
 use select::{Select, SelectPort};
 use unstable::atomics::{AtomicUint, AtomicOption, Acquire, Relaxed, SeqCst};
-use unstable::sync::UnsafeArc;
+use unstable::sync::{UnsafeArc, Exclusive};
 use util;
 use util::Void;
 use comm::{GenericChan, GenericSmartChan, GenericPort, Peekable, SendDeferred};
@@ -447,6 +447,23 @@ pub fn stream<T: Send>() -> (Port<T>, Chan<T>) {
     return (port, chan);
 }
 
+pub struct ConnectedChan<T> {
+    next: RefCell<StreamChanOne<T>>,
+    dep_count: Exclusive<uint>
+}
+
+pub struct ConnectedPort<T> {
+    next: RefCell<Option<StreamPortOne<T>>>,
+    dep_count: Exclusive<uint>
+}
+
+pub fn connected_stream<T: Send>() -> (ConnectedPort<T>, ConnectedChan<T>) {
+    let (pone, cone) = oneshot();
+    let chan = ConnectedChan { next: RefCell::new(cone), dep_count: Exclusive::new(1) };
+    let port = ConnectedPort { next: RefCell::new(Some(pone)), dep_count: chan.dep_count.clone() };
+    return (port, chan);
+}
+
 impl<T: Send> Chan<T> {
     fn try_send_inner(&self, val: T, do_resched: bool) -> bool {
         let (next_pone, mut cone) = oneshot();
@@ -618,6 +635,62 @@ impl<T: Send> Clone for SharedChan<T> {
     }
 }
 
+pub struct ConnectedSharedChan<T> {
+    // Just like Chan, but a shared AtomicOption instead of Cell
+    priv next: UnsafeArc<AtomicOption<StreamChanOne<T>>>,
+    priv dep_count: Exclusive<uint>
+}
+
+impl<T: Send> ConnectedSharedChan<T> {
+    pub fn new(chan: ConnectedChan<T>) -> ConnectedSharedChan<T> {
+        let dep_count = chan.dep_count.clone();
+        let next = chan.next.unwrap();
+        let next = AtomicOption::new(~next);
+        ConnectedSharedChan { next: UnsafeArc::new(next), dep_count: dep_count }
+    }
+}
+
+impl<T: Send> ConnectedSharedChan<T> {
+    fn try_send_inner(&self, val: T, do_resched: bool) -> bool {
+        unsafe {
+            let (next_pone, next_cone) = oneshot();
+            let cone = (*self.next.get()).swap(~next_cone, SeqCst);
+            cone.unwrap().try_send_inner(StreamPayload { val: val, next: next_pone },
+                                         do_resched)
+        }
+    }
+}
+
+impl<T: Send> GenericChan<T> for ConnectedSharedChan<T> {
+    fn send(&self, val: T) {
+        self.try_send(val);
+    }
+}
+
+impl<T: Send> GenericSmartChan<T> for ConnectedSharedChan<T> {
+    fn try_send(&self, val: T) -> bool {
+        self.try_send_inner(val, true)
+    }
+}
+
+impl<T: Send> ConnectedSharedChan<T> {
+    fn get_dep_count(&self) -> uint {
+        let mut dep_count = 0;
+        unsafe { self.dep_count.with(|count| dep_count = *count); }
+        dep_count
+    }
+}
+
+impl<T: Send> Clone for ConnectedSharedChan<T> {
+    fn clone(&self) -> ConnectedSharedChan<T> {
+        unsafe { self.dep_count.with(|count| *count += 1); }
+        ConnectedSharedChan {
+            next: self.next.clone(),
+            dep_count: self.dep_count.clone()
+        }
+    }
+}
+
 pub struct SharedPort<T> {
     // The next port on which we will receive the next port on which we will receive T
     priv next_link: UnsafeArc<AtomicOption<PortOne<StreamPortOne<T>>>>
@@ -665,10 +738,105 @@ impl<T: Send> GenericPort<T> for SharedPort<T> {
     }
 }
 
+impl<T: Send> Peekable<T> for SharedPort<T> {
+    fn peek(&self) -> bool {
+        unsafe {
+            let (next_link_port, next_link_chan) = oneshot();
+            let link_port = (*self.next_link.get()).swap(~next_link_port, SeqCst);
+            let link_port = link_port.unwrap();
+            let data_port = link_port.recv();
+            let res = data_port.peek();
+            next_link_chan.send(data_port);
+            return res;
+        }
+    }
+}
+
 impl<T: Send> Clone for SharedPort<T> {
     fn clone(&self) -> SharedPort<T> {
         SharedPort {
             next_link: self.next_link.clone()
+        }
+    }
+}
+
+pub struct ConnectedSharedPort<T> {
+    // The next port on which we will receive the next port on which we will receive T
+    priv next_link: UnsafeArc<AtomicOption<PortOne<StreamPortOne<T>>>>,
+    priv dep_count: Exclusive<uint>
+}
+
+impl<T: Send> ConnectedSharedPort<T> {
+    pub fn new(port: ConnectedPort<T>) -> ConnectedSharedPort<T> {
+        // Put the data port into a new link pipe
+        let dep_count = port.dep_count.clone();
+        let next_data_port = port.next.unwrap().unwrap();
+        let (next_link_port, next_link_chan) = oneshot();
+        next_link_chan.send(next_data_port);
+        let next_link = AtomicOption::new(~next_link_port);
+        ConnectedSharedPort { next_link: UnsafeArc::new(next_link), dep_count: dep_count }
+    }
+}
+
+impl<T: Send> GenericPort<T> for ConnectedSharedPort<T> {
+    fn recv(&self) -> T {
+        match self.try_recv() {
+            Some(val) => val,
+            None => {
+                fail!("receiving on a closed channel");
+            }
+        }
+    }
+
+    fn try_recv(&self) -> Option<T> {
+        unsafe {
+            let (next_link_port, next_link_chan) = oneshot();
+            let link_port = (*self.next_link.get()).swap(~next_link_port, SeqCst);
+            let link_port = link_port.unwrap();
+            let data_port = link_port.recv();
+            let (next_data_port, res) = match data_port.try_recv() {
+                Some(StreamPayload { val, next }) => {
+                    (next, Some(val))
+                }
+                None => {
+                    let (next_data_port, _) = oneshot();
+                    (next_data_port, None)
+                }
+            };
+            next_link_chan.send(next_data_port);
+            return res;
+        }
+    }
+}
+
+impl<T: Send> Peekable<T> for ConnectedSharedPort<T> {
+    fn peek(&self) -> bool {
+        unsafe {
+            let (next_link_port, next_link_chan) = oneshot();
+            let link_port = (*self.next_link.get()).swap(~next_link_port, SeqCst);
+            let link_port = link_port.unwrap();
+            let data_port = link_port.recv();
+            let res = data_port.peek();
+            next_link_chan.send(data_port);
+            return res;
+        }
+    }
+}
+
+impl<T: Send> ConnectedSharedPort<T> {
+    fn get_dep_count(&self) -> uint {
+        let mut dep_count = 0;
+        unsafe { self.dep_count.with(|count| dep_count = *count); }
+        dep_count
+    }
+}
+
+impl<T: Send> Clone for ConnectedSharedPort<T> {
+    fn clone(&self) -> ConnectedSharedPort<T> {
+        unsafe { self.dep_count.with(|count| *count += 1); }
+        ConnectedSharedPort {
+            next_link: self.next_link.clone(),
+            dep_count: self.dep_count.clone()
         }
     }
 }
