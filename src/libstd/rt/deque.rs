@@ -207,8 +207,8 @@ impl<T: Send> Stealer<T> {
     }
 
     
-    pub fn depth_to_steal(&self) -> int {
-        unsafe { (*self.deque.get()).depth_to_steal() }
+    pub fn dep_count_to_steal(&self) -> uint {
+        unsafe { (*self.deque.get()).dep_count_to_steal() }
     }
     
 
@@ -302,7 +302,7 @@ impl<T: Send> Deque<T> {
         }
     }
 
-    unsafe fn depth_to_steal(&mut self) -> int {
+    unsafe fn dep_count_to_steal(&mut self) -> uint {
         let t = self.top.load(SeqCst);
         let old = self.array.load(SeqCst);
         let b = self.bottom.load(SeqCst);
@@ -316,9 +316,9 @@ impl<T: Send> Deque<T> {
             return -2
         }
         let data: ~Task = cast::transmute((*a).get(t));
-        let depth = data.get_depth();
+        let dep_count = data.get_dep_count();
         cast::forget(data);
-        depth
+        dep_count
     }
 
     unsafe fn maybe_shrink(&mut self, b: int, t: int) {

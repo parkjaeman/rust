@@ -638,7 +638,7 @@ impl<T: Send> Clone for SharedChan<T> {
 pub struct ConnectedSharedChan<T> {
     // Just like Chan, but a shared AtomicOption instead of Cell
     priv next: UnsafeArc<AtomicOption<StreamChanOne<T>>>,
-    priv dep_count: Exclusive<uint>
+    dep_count: Exclusive<uint>
 }
 
 impl<T: Send> ConnectedSharedChan<T> {
@@ -674,7 +674,7 @@ impl<T: Send> GenericSmartChan<T> for ConnectedSharedChan<T> {
 }
 
 impl<T: Send> ConnectedSharedChan<T> {
-    fn get_dep_count(&self) -> uint {
+    pub fn get_dep_count(&self) -> uint {
         let mut dep_count = 0;
         unsafe { self.dep_count.with(|count| dep_count = *count); }
         dep_count
@@ -683,7 +683,6 @@ impl<T: Send> ConnectedSharedChan<T> {
 
 impl<T: Send> Clone for ConnectedSharedChan<T> {
     fn clone(&self) -> ConnectedSharedChan<T> {
-        unsafe { self.dep_count.with(|count| *count += 1); }
         ConnectedSharedChan {
             next: self.next.clone(),
             dep_count: self.dep_count.clone()
@@ -824,7 +823,7 @@ impl<T: Send> Peekable<T> for ConnectedSharedPort<T> {
 }
 
 impl<T: Send> ConnectedSharedPort<T> {
-    fn get_dep_count(&self) -> uint {
+    pub fn get_dep_count(&self) -> uint {
         let mut dep_count = 0;
         unsafe { self.dep_count.with(|count| dep_count = *count); }
         dep_count

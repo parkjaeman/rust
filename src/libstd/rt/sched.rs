@@ -428,18 +428,18 @@ impl Scheduler {
     fn try_steals(&mut self) -> Option<~Task> {
         let work_queues = &mut self.work_queues;
         let len = work_queues.len();
-        let mut max_depth = -1;
-        let mut max_depth_index = 0;
+        let mut max_dep = -1;
+        let mut max_dep_index = 0;
         for i in range(0, len) {
-            let depth = work_queues[i].depth_to_steal();
-            if depth > max_depth {
-                max_depth = depth;
-                max_depth_index = i;
+            let dep = (work_queues[i].dep_count_to_steal() as int);
+            if dep > max_dep {
+                max_dep = dep;
+                max_dep_index = i;
             }
         }
 
-        if max_depth >= 0 {
-            match work_queues[max_depth_index].steal() {
+        if max_dep >= 0 {
+            match work_queues[max_dep_index].steal() {
                 deque::Data(task) => {
                     rtdebug!("found task by stealing");
                     return Some(task)

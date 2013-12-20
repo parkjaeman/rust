@@ -63,6 +63,7 @@ use rt::local::Local;
 use rt::task::{UnwindResult, Success, Failure};
 use send_str::{SendStr, IntoSendStr};
 use util;
+use rt::comm::ConnectedSharedChan;
 
 #[cfg(test)] use any::Any;
 #[cfg(test)] use comm::SharedChan;
@@ -330,6 +331,29 @@ impl TaskBuilder {
         spawn::spawn_raw(opts, f);
     }
 
+    pub fn spawn_with(mut self, chan: ConnectedSharedChan<uint>, f: proc()) {
+        let gen_body = self.gen_body.take();
+        let notify_chan = self.opts.notify_chan.take();
+        let name = self.opts.name.take();
+        let x = self.consume();
+        let opts = TaskOpts {
+            watched: x.opts.watched,
+            notify_chan: notify_chan,
+            name: name,
+            sched: x.opts.sched,
+            stack_size: x.opts.stack_size,
+        };
+        let f = match gen_body {
+            Some(gen) => {
+                gen(f)
+            }
+            None => {
+                f
+            }
+        };
+        spawn::spawn_raw_with(opts, chan, f);
+    }
+
     /**
      * Execute a function in another task and return either the return value
      * of the function or result::err.
@@ -392,6 +416,11 @@ pub fn default_task_opts() -> TaskOpts {
 pub fn spawn(f: proc()) {
     let task = task();
     task.spawn(f)
+}
+
+pub fn spawn_with(chan: ConnectedSharedChan<uint>, f: proc()) {
+    let task = task();
+    task.spawn_with(chan, f)
 }
 
 pub fn spawn_sched(mode: SchedMode, f: proc()) {

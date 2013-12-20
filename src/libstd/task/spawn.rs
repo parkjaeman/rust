@@ -87,6 +87,8 @@ use rt::thread::Thread;
 use rt::{in_green_task_context, new_event_loop};
 use task::SingleThreaded;
 use task::TaskOpts;
+use rt::comm::ConnectedSharedChan;
+
 
 #[cfg(test)] use task::default_task_opts;
 #[cfg(test)] use comm;
@@ -130,6 +132,110 @@ pub fn spawn_raw(mut opts: TaskOpts, f: proc()) {
             } else {
                 Task::build_homed_root(opts.stack_size, f, Sched(new_sched_handle))
             };
+
+            // Create a task that will later be used to join with the new scheduler
+            // thread when it is ready to terminate
+            let (thread_port, thread_chan) = oneshot();
+            let thread_port_cell = Cell::new(thread_port);
+            let join_task = do Task::build_child(None) {
+                debug!("running join task");
+                let thread_port = thread_port_cell.take();
+                let thread: Thread<()> = thread_port.recv();
+                thread.join();
+            };
+
+            // Put the scheduler into another thread
+            let new_sched_cell = Cell::new(new_sched);
+            let orig_sched_handle_cell = Cell::new((*sched).make_handle());
+            let join_task_cell = Cell::new(join_task);
+
+            let thread = do Thread::start {
+                let mut new_sched = new_sched_cell.take();
+                let mut orig_sched_handle = orig_sched_handle_cell.take();
+                let join_task = join_task_cell.take();
+
+                let bootstrap_task = ~do Task::new_root(&mut new_sched.stack_pool, None) || {
+                    debug!("boostrapping a 1:1 scheduler");
+                };
+                new_sched.bootstrap(bootstrap_task);
+
+                // Now tell the original scheduler to join with this thread
+                // by scheduling a thread-joining task on the original scheduler
+                orig_sched_handle.send(TaskFromFriend(join_task));
+
+                // NB: We can't simply send a message from here to another task
+                // because this code isn't running in a task and message passing doesn't
+                // work outside of tasks. Hence we're sending a scheduler message
+                // to execute a new task directly to a scheduler.
+            };
+
+            // Give the thread handle to the join task
+            thread_chan.send(thread);
+
+            // When this task is enqueued on the current scheduler it will then get
+            // forwarded to the scheduler to which it is pinned
+            new_task
+        }
+    };
+
+    if opts.notify_chan.is_some() {
+        let notify_chan = opts.notify_chan.take_unwrap();
+        let notify_chan = Cell::new(notify_chan);
+        let on_exit: proc(UnwindResult) = proc(task_result) {
+            notify_chan.take().send(task_result)
+        };
+        task.death.on_exit = Some(on_exit);
+    }
+
+    task.name = opts.name.take();
+    debug!("spawn calling run_task");
+    Scheduler::run_task(task);
+
+}
+
+pub fn spawn_raw_with(mut opts: TaskOpts, chan: ConnectedSharedChan<uint>, f: proc()) {
+    assert!(in_green_task_context());
+
+    let mut temp = 0;
+    unsafe { chan.dep_count.with(|count| temp = *count) } ;
+    debug!("temp = {}", temp);
+
+    let mut task = if opts.sched.mode != SingleThreaded {
+        if opts.watched {
+            Task::build_child(opts.stack_size, f)
+        } else {
+            Task::build_root(opts.stack_size, f)
+        }
+    } else {
+        unsafe {
+            // Creating a 1:1 task:thread ...
+            let sched: *mut Scheduler = Local::unsafe_borrow();
+            let sched_handle = (*sched).make_handle();
+
+            // Since this is a 1:1 scheduler we create a queue not in
+            // the stealee set. The run_anything flag is set false
+            // which will disable stealing.
+            let (worker, _stealer) = (*sched).work_queue.pool().deque();
+
+            // Create a new scheduler to hold the new task
+            let mut new_sched = ~Scheduler::new_special(new_event_loop(),
+                                                        worker,
+                                                        (*sched).work_queues.clone(),
+                                                        (*sched).sleeper_list.clone(),
+                                                        false,
+                                                        Some(sched_handle));
+            let mut new_sched_handle = new_sched.make_handle();
+
+            // Allow the scheduler to exit when the pinned task exits
+            new_sched_handle.send(Shutdown);
+
+            // Pin the new task to the new scheduler
+            let mut new_task = if opts.watched {
+                Task::build_homed_child(opts.stack_size, f, Sched(new_sched_handle))
+            } else {
+                Task::build_homed_root(opts.stack_size, f, Sched(new_sched_handle))
+            };
+            new_task.dep_count = chan.dep_count.clone(); 
 
             // Create a task that will later be used to join with the new scheduler
             // thread when it is ready to terminate

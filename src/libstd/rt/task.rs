@@ -36,6 +36,7 @@ use rt::sched::{Scheduler, SchedHandle};
 use rt::stack::{StackSegment, StackPool};
 use send_str::SendStr;
 use unstable::finally::Finally;
+use unstable::sync::Exclusive;
 
 // The Task struct represents all state associated with a rust
 // task. There are at this point two primary "subtypes" of task,
@@ -58,7 +59,7 @@ pub struct Task {
     // Dynamic borrowck debugging info
     borrow_list: Option<~[BorrowRecord]>,
     stdout_handle: Option<~Writer>,
-    depth: int,
+    dep_count: Exclusive<uint>,
 }
 
 pub enum TaskType {
@@ -133,8 +134,12 @@ impl Unwinder {
 }
 
 impl Task {
-    pub fn get_depth(&self) -> int {
-        self.depth
+    pub fn get_dep_count(&self) -> uint {
+        let mut dep_count = 0;
+        unsafe {
+            self.dep_count.with(|count| dep_count = *count);
+        }
+        dep_count
     }
 
     // A helper to build a new task using the dynamically found
@@ -196,7 +201,7 @@ impl Task {
             task_type: SchedTask,
             borrow_list: None,
             stdout_handle: None,
-            depth: 0,
+            dep_count: Exclusive::new(0),
         }
     }
 
@@ -231,7 +236,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
-            depth: 0,
+            dep_count: Exclusive::new(0),
         }
     }
 
@@ -254,7 +259,7 @@ impl Task {
             task_type: GreenTask(Some(home)),
             borrow_list: None,
             stdout_handle: None,
-            depth: (self.depth + 1),
+            dep_count: Exclusive::new(0),
         }
     }
 
