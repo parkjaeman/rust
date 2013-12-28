@@ -254,6 +254,13 @@ impl<T: Send> Clone for SharedPort<T> {
     }
 }
 
+impl<T: Send> Peekable<T>  for SharedPort<T> {
+    fn peek(&self) -> bool {
+        let &SharedPort { x: ref p } = self;
+        p.peek()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use comm::*;

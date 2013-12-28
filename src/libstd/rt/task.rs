@@ -161,8 +161,31 @@ impl Task {
         })
     }
 
+    pub fn build_homed_child_with(stack_size: Option<uint>,
+                             dep_count: &Exclusive<uint>,
+                             f: proc(),
+                             home: SchedHome)
+                             -> ~Task {
+        let f = Cell::new(f);
+        let home = Cell::new(home);
+        Local::borrow(|running_task: &mut Task| {
+            let mut sched = running_task.sched.take_unwrap();
+            let mut new_task = ~running_task.new_child_homed(&mut sched.stack_pool,
+                                                         stack_size,
+                                                         home.take(),
+                                                         f.take());
+            new_task.dep_count = dep_count.clone();
+            running_task.sched = Some(sched);
+            new_task
+        })
+    }
+
     pub fn build_child(stack_size: Option<uint>, f: proc()) -> ~Task {
         Task::build_homed_child(stack_size, f, AnySched)
+    }
+
+    pub fn build_child_with(stack_size: Option<uint>, dep_count: &Exclusive<uint>, f: proc()) -> ~Task {
+        Task::build_homed_child_with(stack_size, dep_count, f, AnySched)
     }
 
     pub fn build_homed_root(stack_size: Option<uint>,

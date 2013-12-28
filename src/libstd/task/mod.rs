@@ -331,7 +331,7 @@ impl TaskBuilder {
         spawn::spawn_raw(opts, f);
     }
 
-    pub fn spawn_with(mut self, chan: ConnectedSharedChan<uint>, f: proc()) {
+    pub fn spawn_with(mut self, chan: &ConnectedSharedChan<uint>, f: proc()) {
         let gen_body = self.gen_body.take();
         let notify_chan = self.opts.notify_chan.take();
         let name = self.opts.name.take();
@@ -351,7 +351,7 @@ impl TaskBuilder {
                 f
             }
         };
-        spawn::spawn_raw_with(opts, chan, f);
+        spawn::spawn_raw_with(opts, &chan.dep_count, f);
     }
 
     /**
@@ -418,7 +418,7 @@ pub fn spawn(f: proc()) {
     task.spawn(f)
 }
 
-pub fn spawn_with(chan: ConnectedSharedChan<uint>, f: proc()) {
+pub fn spawn_with(chan: &ConnectedSharedChan<uint>, f: proc()) {
     let task = task();
     task.spawn_with(chan, f)
 }

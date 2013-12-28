@@ -87,7 +87,7 @@ use rt::thread::Thread;
 use rt::{in_green_task_context, new_event_loop};
 use task::SingleThreaded;
 use task::TaskOpts;
-use rt::comm::ConnectedSharedChan;
+use unstable::sync::Exclusive;
 
 
 #[cfg(test)] use task::default_task_opts;
@@ -193,16 +193,12 @@ pub fn spawn_raw(mut opts: TaskOpts, f: proc()) {
 
 }
 
-pub fn spawn_raw_with(mut opts: TaskOpts, chan: ConnectedSharedChan<uint>, f: proc()) {
+pub fn spawn_raw_with(mut opts: TaskOpts, dep_count: &Exclusive<uint>, f: proc()) {
     assert!(in_green_task_context());
-
-    let mut temp = 0;
-    unsafe { chan.dep_count.with(|count| temp = *count) } ;
-    debug!("temp = {}", temp);
 
     let mut task = if opts.sched.mode != SingleThreaded {
         if opts.watched {
-            Task::build_child(opts.stack_size, f)
+            Task::build_child_with(opts.stack_size, dep_count, f)
         } else {
             Task::build_root(opts.stack_size, f)
         }
@@ -230,12 +226,11 @@ pub fn spawn_raw_with(mut opts: TaskOpts, chan: ConnectedSharedChan<uint>, f: pr
             new_sched_handle.send(Shutdown);
 
             // Pin the new task to the new scheduler
-            let mut new_task = if opts.watched {
+            let new_task = if opts.watched {
                 Task::build_homed_child(opts.stack_size, f, Sched(new_sched_handle))
             } else {
                 Task::build_homed_root(opts.stack_size, f, Sched(new_sched_handle))
             };
-            new_task.dep_count = chan.dep_count.clone(); 
 
             // Create a task that will later be used to join with the new scheduler
             // thread when it is ready to terminate

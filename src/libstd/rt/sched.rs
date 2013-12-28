@@ -439,6 +439,7 @@ impl Scheduler {
         }
 
         if max_dep >= 0 {
+            //println!("In try_steals(), max_dep = {}", max_dep);
             match work_queues[max_dep_index].steal() {
                 deque::Data(task) => {
                     rtdebug!("found task by stealing");
